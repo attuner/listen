@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Home Audio Transmitter</title>
+</head>
+<body style="font-family: sans-serif; padding: 2rem;">
+  <h2>Home Audio Transmitter</h2>
+  <button id="startBtn">Start Broadcasting</button>
+  <p id="status">Status: Disconnected</p>
+
+  <script>
+    const signalingUrl = 'wss://YOUR_SIGNALING_SERVER_HOST:8080';
+    let pc;
+    let ws;
+
+    const rtcConfig = {
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    };
+
+    document.getElementById('startBtn').onclick = async () => {
+      ws = new WebSocket(signalingUrl);
+
+      ws.onopen = async () => {
+        ws.send(JSON.stringify({ type: 'register', role: 'sender' }));
+        document.getElementById('status').innerText = 'Status: Waiting for receiver...';
+
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        pc = new RTCPeerConnection(rtcConfig);
+
+        stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+        pc.onicecandidate = (event) => {
+          if (event.candidate) {
+            ws.send(JSON.stringify({ type: 'candidate', candidate: event.candidate, role: 'sender' }));
+          }
+        };
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        ws.send(JSON.stringify({ type: 'offer', sdp: offer, role: 'sender' }));
+      };
+
+      ws.onmessage = async (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'answer') {
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+          document.getElementById('status').innerText = 'Status: Broadcasting audio';
+        } else if (msg.type === 'candidate') {
+          await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+        }
+      };
+    };
+  </script>
+</body>
+</html>
