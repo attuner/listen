@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Home Audio Transmitter</title>
+  <style>
+    body { font-family: sans-serif; padding: 2rem; background: #f4f4f9; }
+    button { padding: 10px 18px; font-size: 1rem; cursor: pointer; }
+    .status { margin-top: 1rem; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h2>Home Audio Transmitter</h2>
+  <button id="startBtn">Start Broadcasting</button>
+  <p id="status" class="status">Status: Idle</p>
+
+  <script>
+    // Replace with your Apps Script Web App URL
+    const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxeoE3pVorb4EHOsaUU20QIvkXdHZPiP8jGCzLR_H0X04x_1icjxBKwFhcubBR-fn2AdA/exec';
+    
+    let pc;
+    const rtcConfig = {
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    };
+
+    async function sendData(payload) {
+      await fetch(SCRIPT_URL, {
+        method: 'POST',
+        mode: 'no-cors', // standard for GAS web apps
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    }
+
+    async function pollData() {
+      const res = await fetch(SCRIPT_URL);
+      return await res.json();
+    }
+
+    document.getElementById('startBtn').onclick = async () => {
+      const status = document.getElementById('status');
+      status.innerText = 'Resetting signal board...';
+      
+      // Reset sheet data
+      await sendData({ action: 'reset' });
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      pc = new RTCPeerConnection(rtcConfig);
+
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          sendData({ action: 'set', key: 'candidate_sender', value: event.candidate });
+        }
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      status.innerText = 'Publishing offer to Google Sheets...';
+      await sendData({ action: 'set', key: 'offer', value: offer });
+      status.innerText = 'Waiting for Office to connect...';
+
+      // Poll for answer and remote candidates
+      const pollInterval = setInterval(async () => {
+        try {
+          const data = await pollData();
+          if (data.answer && !pc.currentRemoteDescription) {
+            await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+            status.innerText = 'Connected! Audio streaming to office.';
+          }
+          if (data.candidate_receiver) {
+            for (const cand of data.candidate_receiver) {
+              await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+            }
+          }
+          if (pc.connectionState === 'connected') {
+            clearInterval(pollInterval);
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }, 3000);
+    };
+  </script>
+</body>
+</html>

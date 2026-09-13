@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Office Audio Receiver</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      display: flex; justify-content: center; align-items: center;
+      height: 100vh; margin: 0; background: #0f172a; color: #f8fafc;
+    }
+    .card {
+      background: #1e293b; padding: 2rem; border-radius: 10px;
+      text-align: center; width: 320px; box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+    }
+    button {
+      background: #0284c7; color: white; border: none; padding: 10px 20px;
+      font-size: 1rem; border-radius: 6px; cursor: pointer; margin-top: 1rem;
+    }
+    button:hover { background: #0369a1; }
+    .status { margin-top: 1rem; font-size: 0.9rem; color: #94a3b8; }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <h3>Office Audio Feed</h3>
+    <button id="connectBtn">Connect to Home</button>
+    <div id="status" class="status">Idle</div>
+    <audio id="remoteAudio" autoplay controls style="margin-top: 1.5rem; width: 100%; display: none;"></audio>
+  </div>
+
+  <script>
+    // Replace with your Apps Script Web App URL
+    const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxeoE3pVorb4EHOsaUU20QIvkXdHZPiP8jGCzLR_H0X04x_1icjxBKwFhcubBR-fn2AdA/exec';
+
+    const audioElement = document.getElementById('remoteAudio');
+    const status = document.getElementById('status');
+    let pc;
+
+    const rtcConfig = {
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    };
+
+    async function sendData(payload) {
+      await fetch(SCRIPT_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    }
+
+    async function pollData() {
+      const res = await fetch(SCRIPT_URL);
+      return await res.json();
+    }
+
+    document.getElementById('connectBtn').onclick = async () => {
+      status.innerText = 'Checking for home broadcast...';
+
+      pc = new RTCPeerConnection(rtcConfig);
+
+      pc.ontrack = (event) => {
+        audioElement.srcObject = event.streams[0];
+        audioElement.style.display = 'block';
+        status.innerText = 'Live audio connected.';
+      };
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          sendData({ action: 'set', key: 'candidate_receiver', value: event.candidate });
+        }
+      };
+
+      // Poll until the offer appears
+      const pollInterval = setInterval(async () => {
+        try {
+          const data = await pollData();
+          
+          if (data.offer && !pc.currentRemoteDescription) {
+            status.innerText = 'Offer found. Establishing connection...';
+            await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+            
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+
+            await sendData({ action: 'set', key: 'answer', value: answer });
+          }
+
+          if (data.candidate_sender) {
+            for (const cand of data.candidate_sender) {
+              await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+            }
+          }
+
+          if (pc.connectionState === 'connected') {
+            clearInterval(pollInterval);
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }, 3000);
+    };
+  </script>
+</body>
+</html>
